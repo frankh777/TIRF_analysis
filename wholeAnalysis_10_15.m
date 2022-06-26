@@ -1,4 +1,5 @@
-[acceptedTraces,bigsignal,smallsignal]=traceSelection('1_ecCLC_Val_FCCP_Cal.tif',false,true,true); %import TIFF file containing microscopy data and select all traces
+[name,filepath] = uigetfile('*.tif');
+[acceptedTraces,bigsignal,smallsignal]=traceSelection(strcat(filepath,name),false,true,true); %import TIFF file containing microscopy data and select all traces
 numsigs=size(acceptedTraces);%
 numsigs=numsigs(1);
 
