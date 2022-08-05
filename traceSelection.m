@@ -1,10 +1,11 @@
-function [outputTraces, outputBig, outputSmall] = traceSelection(filename, corrob, noise, shape)
+function [outputTraces, outputBig, outputSmall, steadyStateStart, steadyStateEnd, endOfExp, pH6start, pH6end, pH4start, pH4end] = traceSelection(filename, corrob, noise, shape)
 %traceSelection.m gets all traces and then filters based on noise and MAE
 %   First, the traces are extracted from the background-subtracted and gaussian intensity corrected movie by tracking each peak
 %   over time. The peaks were extracted using the CSOB method from the
-%   original movie.  Traces are filtered with experimentally determined
+%   original movie.  Traces are filtered with manually determined
 %   noise and MAE cutoffs. 
 
+%loading data
 warning('off','all') % Suppress all the tiff warnings
 tstack  = Tiff(filename);
 [numRows,numCols] = size(tstack.read()); %image size
@@ -20,7 +21,6 @@ data=uint16(data);
 
 bigData=data(:,:,1:movieLength/2);%large signal is first half of movie
 smallData=data(:,:,movieLength/2+1:movieLength);%secondary signal is second half
-
 
 bigPickingImage = zeros(numRows,numCols);
 bigBackground = zeros(numRows,numCols);
@@ -59,12 +59,12 @@ peakSize=size(peaksOut,1);%how many peaks
 bigData=uint16(double(bigData)-double(bigBackground));
 smallData=uint16(double(smallData)-double(smallBackground));
 
-
 %get figure of regular image
 figure()
 imagesc(imadjust(bigData(:,:,1)))
 xlabel('X pixel')
 ylabel('Y pixel')
+title("Original image with contrast")
 set(gca,'FontSize',18)
 % figure()
 % imagesc(bigData(:,:,1))
@@ -79,6 +79,7 @@ figure()
 imagesc(imadjust(uint16(bigData(:,:,1))))
 xlabel('X pixel')
 ylabel('Y pixel')
+title("Gaussian corrected image with contrast")
 set(gca,'FontSize',18)
 
 bigsignal = zeros(movieLength/2,peakSize);
@@ -93,34 +94,67 @@ for ii = 1:movieLength/2%frame of movie, essentially time
     end
 end
 
-
-ratioSignal=bigsignal./smallsignal;%comment out if variable already exists
-cutoff=.2800;%for noise with newest norm method
-%cutoff=.065;%for older norm method
+ratioSignal=bigsignal./smallsignal;%can comment out if variable already exists
+cutoff=.2800;%for noise with newest normalization method
 
 bigGood=[];
 bigBad=[];
 smallGood=[];
 smallBad=[];
+
+%The following chunk of code also automatically finds the entire
+%background region. If it becomes useful for future work, lastNonNaN is the
+%beginning of the background measurement portion of the movie.
+
+%Get where the background starts based on which parts of the signal are Inf
+%or NaN meaning they are dividing by 0, which only happens in background
+%measurements
+avgRatioSignal=mean(ratioSignal,2);
+avgRatioSignal(isinf(avgRatioSignal)) = NaN;%trick to make later selection constant
+lastNonNaN = max(find(~isnan(avgRatioSignal)));%index of last normal number
+
+%output figure for identifying sections
+figure()
+plot(avgRatioSignal)
+xlabel('Frame number')
+ylabel('Normalized ratio values')
+title("Experiment timeseries")
+set(gca,'FontSize',18)
+drawnow;
+%bgStart is no longer needed since background can be easily automatically
+
+
+disp("" + ...
+    "The trace needed for making selections may be behind this window" + ...
+    "")
+%25,100,120 respectively for provided experiment
+steadyStateStart = str2double(input ("In which frame does the steady state start? ", "s"));
+steadyStateEnd = str2double(input ("In which frame does the steady state end? ", "s"));
+endOfExp = str2double(input ("In which frame does the experiment end (when ionophore is introduced)? ", "s"));
+%that is the flat high part after steady state, 125,145 respecitvely for
+%testing
+pH6start = str2double(input ("In which frame does the pH 6 step start? ", "s"));
+pH6end = str2double(input ("In which frame does the pH 6 step end? ", "s"));
+%the lowest portion of the calibration curve, 159,179 respectively for
+%testing
+pH4start = str2double(input ("In which frame does the pH 4 step start? ", "s"));
+pH4end = str2double(input ("In which frame does the pH 4 step end? ", "s"));
+
 %%%%%%%%%%%%%%%%NOISE REMOVAL%%%%%%%%%%%%%%%%
-%removeNoisy.m removes noisy traces by sd of frames 25-100 where it is
-%steady-state
-%no longer a standalone function but maybe I should make it one
-%Also make sure to add customization - or auto-steady state detection
+%removes noisy traces by sd of frames 25-100 where it is steady-state
 if(noise)
     goodTraces=[];
     badTraces=[];
     for ii = 1:peakSize(1)
-        trace=slopeNormalize(ratioSignal(1:320,ii));%use new norm
-        %trace=normalize(ratioSignal(1:320,ii));%with old one
-        if(std(trace(25:100))>cutoff)
-            badTraces=[badTraces ratioSignal(1:320,ii)];
-            bigBad=[bigBad bigsignal(1:320,ii)];
-            smallBad=[smallBad smallsignal(1:320,ii)];
+        trace=slopeNormalize(ratioSignal(1:lastNonNaN,ii), pH6start, pH6end, pH4start, pH4end);%use new norm
+        if(std(trace(steadyStateStart:steadyStateEnd))>cutoff)
+            badTraces=[badTraces ratioSignal(1:lastNonNaN,ii)];
+            bigBad=[bigBad bigsignal(1:lastNonNaN,ii)];
+            smallBad=[smallBad smallsignal(1:lastNonNaN,ii)];
         else
-            goodTraces=[goodTraces ratioSignal(1:320,ii)];
-            bigGood=[bigGood bigsignal(1:320,ii)];
-            smallGood=[smallGood smallsignal(1:320,ii)];
+            goodTraces=[goodTraces ratioSignal(1:lastNonNaN,ii)];
+            bigGood=[bigGood bigsignal(1:lastNonNaN,ii)];
+            smallGood=[smallGood smallsignal(1:lastNonNaN,ii)];
         end
     end
 else
@@ -130,17 +164,16 @@ else
 end
 
 %setting params for shape removal (MAE)
-avgGood=normalize(mean(goodTraces(1:320,:),2));%stick with old norm
-ideal=avgGood(1:120);
+avgGood=normalize(mean(goodTraces(1:lastNonNaN,:),2));%stick with old norm
+ideal=avgGood(1:endOfExp);
 numGood=size(goodTraces);
 numGood=numGood(2);
 badness=zeros([1 numGood]);
 
-%%%%%%%%%%%%%%WEIRD SHAPE REMOVAL%%%%%%%%%%%%%
-%again might want to make a seperate function for github purposes
+%%%%%%%%%%%%%%WEIRD SHAPE REMOVAL WITH MAE%%%%%%%%%%%%%
 if(shape)
     for ii = 1:numGood
-        experiment=goodTraces(1:120,ii);
+        experiment=goodTraces(1:endOfExp,ii);
         badness(ii)=L1norm(ideal,experiment);%still uses old norm because of shortened trace
     end
     
